@@ -176,3 +176,84 @@ else:
 
 if refresh:
     st.caption("Auto-refresh is enabled. Rerun periodically.")
+import yfinance as yf
+import requests
+import streamlit as st
+from textblob import TextBlob
+
+ALPHAVANTAGE_API_KEY = "UANG1JGU08PNMVPA"
+
+def get_live_price(ticker):
+    try:
+        stock = yf.Ticker(ticker)
+        hist = stock.history(period='1d')
+        if not hist.empty:
+            return float(hist["Close"].iloc[-1])
+    except Exception:
+        return None
+    return None
+
+def get_news_sentiment_alpha_vantage(ticker):
+    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={ticker}&apikey={ALPHAVANTAGE_API_KEY}"
+    try:
+        r = requests.get(url)
+        if r.status_code != 200:
+            return 0, []
+        data = r.json()
+        headlines = [d["title"] for d in data.get("feed", [])[:5]]
+        scores = []
+        for hl in headlines:
+            tb = TextBlob(hl)
+            scores.append(tb.sentiment.polarity)
+        avg_sentiment = round(sum(scores)/len(scores), 2) if scores else 0
+        return avg_sentiment, headlines
+    except Exception:
+        return 0, []
+
+def ai_expert_signal(ticker, expert_rules):
+    price = get_live_price(ticker)
+    sentiment_score, news = get_news_sentiment_alpha_vantage(ticker)
+    expert_score = expert_rules.get(ticker, 1)   # 1=keep, 0=avoid
+
+    # Combined logic: Must be expert pick AND have positive sentiment
+    if expert_score and sentiment_score > 0.1:
+        signal = "BUY"
+        reason = "Expert pick + positive news sentiment"
+    elif expert_score and sentiment_score < -0.1:
+        signal = "SELL"
+        reason = "Expert pick but negative news sentiment"
+    else:
+        signal = "HOLD"
+        reason = "Mixed/neutral signal"
+    return {
+        "ticker": ticker,
+        "price": price,
+        "sentiment": sentiment_score,
+        "news": news,
+        "signal": signal,
+        "reason": reason
+    }
+
+def display_ai_expert_dashboard(tickers, expert_rules):
+    st.title("🧠 AI ExpertLogic Dashboard (Live & Sentiment-Powered)")
+    for t in tickers:
+        result = ai_expert_signal(t, expert_rules)
+        st.subheader(f"{result['ticker']}: {result['signal']}")
+        st.write(f"Live Price: {result['price']}")
+        st.write(f"News Sentiment Score: {result['sentiment']:.2f}")
+        st.write(f"Reason: {result['reason']}")
+        if result['news']:
+            st.write("Recent Headlines:")
+            for n in result['news']:
+                st.caption(n)
+        st.write("---")
+
+# Example expert buy candidates with placeholder rules (1=expert likes, 0=avoid, customize as needed!)
+# Extend or change tickers as needed per expert strategy:
+watch_tickers = ['AAPL', 'NVDA', 'KO', 'BAC', 'CROX', 'STNE', 'EEFT', 'PG', 'BMBL', 'TMHC']
+expert_rules = {ticker: 1 for ticker in watch_tickers}   # Set as needed per your logic!
+
+# Call this in your Streamlit app main section:
+display_ai_expert_dashboard(watch_tickers, expert_rules)
+display_ai_expert_dashboard(watch_tickers, expert_rules)
+
