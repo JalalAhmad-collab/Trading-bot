@@ -5,15 +5,13 @@ import numpy as np
 import requests
 from textblob import TextBlob
 import streamlit as st
-
 # =========================
 # Config
 # =========================
-ALPHAVANTAGE_API_KEY = os.getenv("ALPHAVANTAGE_API_KEY", "")
+ALPHAVANTAGE_API_KEY = "NV83A0VN2SAFRP79"
 NEWS_FUNCTION = "NEWS_SENTIMENT"  # AlphaVantage news endpoint
 PRICE_FUNCTION = "TIME_SERIES_DAILY_ADJUSTED"
 SP500_CSV_URL = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
-
 # =========================
 # Utilities
 # =========================
@@ -55,7 +53,6 @@ def fetch_sp500_tickers() -> pd.DataFrame:
             f"Reason: {type(e).__name__}: {e}"
         )
         return fallback
-
 def _av_get(params: dict, retry: int = 2):
     base = "https://www.alphavantage.co/query"
     params = {**params, "apikey": ALPHAVANTAGE_API_KEY}
@@ -70,8 +67,6 @@ def _av_get(params: dict, retry: int = 2):
             return data
         time.sleep(2)
     return {}
-
-
 def fetch_price_summary(ticker: str) -> dict:
     """Get latest close price and daily change percent from AlphaVantage."""
     if not ALPHAVANTAGE_API_KEY:
@@ -91,8 +86,6 @@ def fetch_price_summary(ticker: str) -> dict:
     if prev_close and prev_close != 0:
         pct_change = (last_close - prev_close) / prev_close * 100
     return {"close": last_close, "pct_change": pct_change}
-
-
 def fetch_news_and_sentiment(ticker: str) -> dict:
     """Fetch news and compute sentiment score for a ticker."""
     if not ALPHAVANTAGE_API_KEY:
@@ -111,8 +104,6 @@ def fetch_news_and_sentiment(ticker: str) -> dict:
     # pick one key headline if available
     key_headline = headlines[0] if headlines else ""
     return {"sentiment": overall_sentiment, "headlines": headlines, "key_headline": key_headline}
-
-
 def expert_signal(price: float, sentiment: float) -> tuple:
     """Combine price and sentiment for a trading signal."""
     if not price or price < 0.01:
@@ -127,8 +118,6 @@ def expert_signal(price: float, sentiment: float) -> tuple:
         return "Sell", "#ff6b6b"
     else:
         return "Hold", "#f59e0b"
-
-
 def reason_from_signal(signal: str, sentiment: float, headline: str) -> str:
     """Generate an exact reason string based on expert logic and sentiment/headline."""
     sentiment_note = f"sentiment {sentiment:+.2f}"
@@ -142,7 +131,6 @@ def reason_from_signal(signal: str, sentiment: float, headline: str) -> str:
     }.get(signal, "")
     headline_note = f" Key headline: {headline}" if headline else ""
     return logic + headline_note
-
 # =========================
 # Main Streamlit App
 # =========================
@@ -152,10 +140,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
 st.title("S&P 500 Trading Bot")
 st.write("AI-driven market screener powered by AlphaVantage + TextBlob NLP.")
-
 # === Sidebar Controls ===
 with st.sidebar:
     st.header("🍐 Configuration")
@@ -168,18 +154,14 @@ with st.sidebar:
         help="Higher = slower but broader coverage.",
     )
     show_news = st.checkbox("Show headlines & sentiment", value=True)
-
 st.divider()
-
 # === Main Content ===
 if st.button("🔍 Scan Market", use_container_width=True):
     sp500_df = fetch_sp500_tickers()
     max_tickers = min(max_tickers, len(sp500_df))
-
     rows = []
     scanned = 0
     prog = st.progress(0, text="Scanning...")
-
     for _, row in sp500_df.iloc[:max_tickers].iterrows():
         ticker = row["ticker"]
         name = row["name"]
@@ -187,7 +169,6 @@ if st.button("🔍 Scan Market", use_container_width=True):
         news = fetch_news_and_sentiment(ticker)
         sentiment = news.get("sentiment", 0.0)
         label, _ = expert_signal(price.get("close", 0), sentiment)
-
         rows.append(
             {
                 "Ticker": ticker,
@@ -202,12 +183,10 @@ if st.button("🔍 Scan Market", use_container_width=True):
         scanned += 1
         prog.progress(min(scanned / max_tickers, 1.0))
         time.sleep(0.2)  # gentle pacing for API
-
     if not rows:
         st.warning("No results to display yet. Check API key or increase max tickers.")
     else:
         df = pd.DataFrame(rows)
-
         # Rank signals: Strong Buy > Buy > Hold > Sell > Strong Sell
         signal_rank = {
             "Strong Buy": 5,
@@ -217,16 +196,13 @@ if st.button("🔍 Scan Market", use_container_width=True):
             "Strong Sell": 1,
         }
         df["_rank"] = df["Signal"].map(signal_rank).fillna(0)
-
         # Split into buy and sell candidates
         buys = df[df["Signal"].isin(["Strong Buy", "Buy"])].copy()
         sells = df[df["Signal"].isin(["Strong Sell", "Sell"])].copy()
-
         # Sort buys: rank desc, sentiment desc, Change% desc
         buys = buys.sort_values(["_rank", "Sentiment", "Change%"], ascending=[False, False, False]).head(10)
         # Sort sells: rank asc (since lower is worse), sentiment asc, Change% asc
         sells = sells.sort_values(["_rank", "Sentiment", "Change%"], ascending=[True, True, True]).head(10)
-
         # Prepare exact reason text
         def add_reason(frame: pd.DataFrame) -> pd.DataFrame:
             reasons = []
@@ -240,10 +216,8 @@ if st.button("🔍 Scan Market", use_container_width=True):
                 )
             frame["Exact Reason"] = reasons
             return frame
-
         buys = add_reason(buys)
         sells = add_reason(sells)
-
         # Display
         st.subheader("Top 10 Buy Candidates")
         if buys.empty:
@@ -251,14 +225,12 @@ if st.button("🔍 Scan Market", use_container_width=True):
         else:
             cols = ["Ticker", "Company", "Signal", "Price", "Change%", "Sentiment", "Headline", "Exact Reason"]
             st.dataframe(buys[cols].reset_index(drop=True), use_container_width=True, hide_index=True)
-
         st.subheader("Top 10 Sell Candidates")
         if sells.empty:
             st.info("No Sell candidates in the scanned set.")
         else:
             cols = ["Ticker", "Company", "Signal", "Price", "Change%", "Sentiment", "Headline", "Exact Reason"]
             st.dataframe(sells[cols].reset_index(drop=True), use_container_width=True, hide_index=True)
-
         if show_news:
             st.divider()
             st.subheader("Key Headlines (Top picks)")
@@ -266,5 +238,4 @@ if st.button("🔍 Scan Market", use_container_width=True):
             for _, r in top_headlines.iterrows():
                 if r.get("Headline"):
                     st.markdown(f"- [{r['Ticker']}] {r['Company']} — {r['Signal']}: {r['Headline']}")
-
 st.caption("Tip: Set ALPHAVANTAGE_API_KEY env var for live data. No handpicked tickers — full S&P 500 auto-scan.")
