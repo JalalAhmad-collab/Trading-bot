@@ -1,329 +1,231 @@
-import datetime as dt
-from typing import Dict, Any, Optional, Tuple
-import ccxt
+import os
+import time
 import pandas as pd
-import yfinance as yf
-import streamlit as st
-
-
-def fetch_crypto_price(symbol: str = "BTC/USD", exchange_name: str = "kraken") -> Dict[str, Any]:
-    try:
-        exchange_class = getattr(ccxt, exchange_name)
-        exchange = exchange_class()
-        ticker = exchange.fetch_ticker(symbol)
-        return {
-            "symbol": symbol,
-            "exchange": exchange_name,
-            "current_price": ticker.get("last"),
-            "bid": ticker.get("bid"),
-            "ask": ticker.get("ask"),
-            "high": ticker.get("high"),
-            "low": ticker.get("low"),
-            "timestamp": ticker.get("timestamp"),
-        }
-    except Exception as e:
-        return {"error": f"{type(e).__name__}: {str(e)}"}
-
-
-def fetch_crypto_ohlcv(symbol: str, exchange_name: str, timeframe: str = "1h", limit: int = 200) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
-    try:
-        exchange_class = getattr(ccxt, exchange_name)
-        exchange = exchange_class()
-        ohlcv = exchange.fetch_ohlcv(symbol, timeframe=timeframe, limit=limit)
-        df = pd.DataFrame(ohlcv, columns=["timestamp", "open", "high", "low", "close", "volume"])
-        df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms")
-        return df, None
-    except Exception as e:
-        return None, f"{type(e).__name__}: {str(e)}"
-
-
-def fetch_stock_price(ticker: str, period: str = "5d") -> Dict[str, Any]:
-    try:
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period=period)
-        if hist.empty:
-            return {"error": f"No data for {ticker}"}
-        current_price = float(hist["Close"].iloc[-1])
-        previous_price = float(hist["Close"].iloc[0])
-        change = current_price - previous_price
-        pct_change = (change / previous_price * 100) if previous_price else 0.0
-        return {
-            "ticker": ticker,
-            "current_price": round(current_price, 2),
-            "previous_price": round(previous_price, 2),
-            "change": round(change, 2),
-            "pct_change": round(pct_change, 2),
-        }
-    except Exception as e:
-        return {"error": f"{type(e).__name__}: {str(e)}"}
-
-
-def sma(series: pd.Series, window: int) -> Optional[float]:
-    if len(series) < window:
-        return None
-    return float(pd.Series(series).rolling(window=window).mean().iloc[-1])
-
-
-def buy_the_dip_logic(current_price: float, moving_average: float, dip_threshold: float = 0.97) -> Dict[str, Any]:
-    if moving_average <= 0:
-        return {"error": "Invalid moving average"}
-    ratio = current_price / moving_average
-    should_buy = ratio < dip_threshold
-    return {
-        "should_buy": should_buy,
-        "current_price": current_price,
-        "moving_average": moving_average,
-        "ratio": round(ratio, 4),
-        "threshold": dip_threshold,
-        "reason": f"Price is {(1 - ratio) * 100:.2f}% below MA" if should_buy else "Price above threshold",
-    }
-
-
-def sell_the_high_logic(current_price: float, moving_average: float, high_threshold: float = 1.03) -> Dict[str, Any]:
-    if moving_average <= 0:
-        return {"error": "Invalid moving average"}
-    ratio = current_price / moving_average
-    should_sell = ratio > high_threshold
-    return {
-        "should_sell": should_sell,
-        "current_price": current_price,
-        "moving_average": moving_average,
-        "ratio": round(ratio, 4),
-        "threshold": high_threshold,
-        "reason": f"Price is {(ratio - 1) * 100:.2f}% above MA" if should_sell else "Price below threshold",
-    }
-
-
-st.set_page_config(page_title="Streamlit SMA Trading App", page_icon="📈", layout="wide")
-st.title("📈 Simple SMA Trading App")
-
-with st.sidebar:
-    st.header("Configuration")
-    market_type = st.radio("Market", ["Crypto (ccxt)", "Stock (yfinance)"], index=0)
-    if market_type == "Crypto (ccxt)":
-        symbol = st.text_input("Symbol (ccxt)", value="BTC/USD")
-        exchange_name = st.text_input("Exchange (ccxt)", value="kraken")
-        timeframe = st.selectbox("Timeframe", ["15m", "1h", "4h", "1d"], index=1)
-    else:
-        stock_ticker = st.text_input("Ticker (yfinance)", value="AAPL")
-    candles = st.slider("Candles for SMA", min_value=20, max_value=500, value=100, step=10)
-    sma_window = st.slider("SMA Window", min_value=5, max_value=100, value=20, step=5)
-    buy_threshold = st.slider("Buy threshold (ratio below SMA)", min_value=0.85, max_value=0.99, value=0.97, step=0.01)
-    sell_threshold = st.slider("Sell threshold (ratio above SMA)", min_value=1.01, max_value=1.15, value=1.03, step=0.01)
-    refresh = st.checkbox("Auto-refresh (every 30s)", value=False)
-
-col1, col2 = st.columns(2)
-if market_type == "Crypto (ccxt)":
-    price = fetch_crypto_price(symbol, exchange_name)
-    if "error" in price:
-        col1.error(f"Price error: {price['error']}")
-    else:
-        ts = price.get("timestamp")
-        ts_str = dt.datetime.fromtimestamp(ts / 1000).isoformat() if isinstance(ts, (int, float)) else "N/A"
-        col1.metric(
-            label=f"{price['symbol']} @ {price['exchange']}",
-            value=f"{price['current_price']}",
-            delta=f"Bid {price['bid']} / Ask {price['ask']}, H {price['high']} L {price['low']}, ts {ts_str}"
-        )
-
-    df, err = fetch_crypto_ohlcv(symbol, exchange_name, timeframe=timeframe, limit=candles)
-    if err:
-        col1.error(f"OHLCV error: {err}")
-        st.stop()
-
-    with col1:
-        st.subheader("OHLCV")
-        st.dataframe(df.tail(10), use_container_width=True)
-        st.line_chart(df.set_index("datetime")["close"], use_container_width=True)
-
-    closes = df["close"].values
-    sma_val = sma(pd.Series(closes), sma_window)
-
-    if sma_val is None:
-        col2.warning(f"Need at least {sma_window} candles for SMA.")
-    else:
-        col2.subheader(f"SMA({sma_window}) = {sma_val:.2f}")
-        last_price = float(closes[-1])
-        buy_dec = buy_the_dip_logic(last_price, sma_val, buy_threshold)
-        sell_dec = sell_the_high_logic(last_price, sma_val, sell_threshold)
-        col2.write("Buy-the-Dip Decision")
-        col2.json(buy_dec)
-        col2.write("Sell-the-High Decision")
-        col2.json(sell_dec)
-        if buy_dec.get("should_buy"):
-            col2.success("BUY signal")
-        elif sell_dec.get("should_sell"):
-            col2.error("SELL signal")
-        else:
-            col2.info("HOLD")
-else:
-    st.subheader("Stock snapshot")
-    sprice = fetch_stock_price(stock_ticker, period="5d")
-    if "error" in sprice:
-        st.error(sprice["error"])
-    else:
-        st.metric(label=stock_ticker, value=sprice["current_price"], delta=f"{sprice['pct_change']}% (5d)")
-    try:
-        hist = yf.Ticker(stock_ticker).history(period="6mo", interval="1d")
-        hist = hist.dropna()
-        st.line_chart(hist["Close"], use_container_width=True)
-        closes = hist["Close"].values[-candles:]
-        if len(closes) >= sma_window:
-            sma_val = sma(pd.Series(closes), sma_window)
-            st.write(f"SMA({sma_window}) = {sma_val:.2f}")
-            last_price = float(closes[-1])
-            buy_dec = buy_the_dip_logic(last_price, sma_val, buy_threshold)
-            sell_dec = sell_the_high_logic(last_price, sma_val, sell_threshold)
-            st.write("Buy-the-Dip Decision")
-            st.json(buy_dec)
-            st.write("Sell-the-High Decision")
-            st.json(sell_dec)
-        else:
-            st.warning(f"Not enough candles for SMA({sma_window}).")
-    except Exception as e:
-        st.error(f"History error: {type(e).__name__}: {e}")
-
-if refresh:
-    st.caption("Auto-refresh is enabled. Rerun periodically.")
-
-# ================= Professional AI Dynamic Screener Module =================
-# Live prices, sentiment, market headlines, and tabular screening UI
+import numpy as np
 import requests
 from textblob import TextBlob
+import streamlit as st
 
-ALPHAVANTAGE_API_KEY = "UANG1JGU08PNMVPA"
+# =========================
+# Config
+# =========================
+ALPHAVANTAGE_API_KEY = os.getenv("ALPHAVANTAGE_API_KEY", "")
+NEWS_FUNCTION = "NEWS_SENTIMENT"  # AlphaVantage news endpoint
+PRICE_FUNCTION = "TIME_SERIES_DAILY_ADJUSTED"
+SNP_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+
+# =========================
+# Utilities
+# =========================
+@st.cache_data(ttl=3600)
+def fetch_sp500_tickers() -> pd.DataFrame:
+    """Fetch live S&P 500 tickers and company names from Wikipedia."""
+    tables = pd.read_html(SNP_WIKI_URL)
+    df = tables[0]
+    df = df.rename(columns={"Symbol": "ticker", "Security": "name"})
+    # Some tickers have "." which AlphaVantage expects as "-" (e.g., BRK.B -> BRK-B)
+    df["ticker"] = df["ticker"].str.replace(".", "-", regex=False)
+    return df[["ticker", "name"]]
 
 
-def get_live_price(ticker: str) -> Optional[float]:
-    try:
-        stock = yf.Ticker(ticker)
-        hist = stock.history(period="1d")
-        if not hist.empty:
-            return float(hist["Close"].iloc[-1])
-    except Exception:
-        return None
-    return None
-
-
-def get_news_sentiment_alpha_vantage(ticker: str) -> Tuple[float, list]:
-    url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={ticker}&apikey={ALPHAVANTAGE_API_KEY}"
-    try:
-        r = requests.get(url)
-        if r.status_code != 200:
-            return 0.0, []
-        data = r.json()
-        headlines = [d.get("title", "") for d in data.get("feed", [])[:10]]
-        scores = []
-        for hl in headlines:
-            try:
-                tb = TextBlob(hl)
-                scores.append(tb.sentiment.polarity)
-            except Exception:
+def _av_get(params: dict, retry: int = 2):
+    base = "https://www.alphavantage.co/query"
+    params = {**params, "apikey": ALPHAVANTAGE_API_KEY}
+    for i in range(retry + 1):
+        r = requests.get(base, params=params, timeout=30)
+        if r.status_code == 200:
+            data = r.json()
+            if "Note" in data or "Information" in data:
+                # Rate limit notice — backoff then retry
+                time.sleep(15)
                 continue
-        avg_sentiment = round(sum(scores) / len(scores), 2) if scores else 0.0
-        return avg_sentiment, headlines
-    except Exception:
-        return 0.0, []
+            return data
+        time.sleep(2)
+    return {}
 
 
-def ai_expert_signal(ticker: str, expert_rules: Dict[str, int]) -> Dict[str, Any]:
-    price = get_live_price(ticker)
-    sentiment_score, news = get_news_sentiment_alpha_vantage(ticker)
-    expert_score = expert_rules.get(ticker, 1)  # 1=keep, 0=avoid
-
-    if expert_score and sentiment_score > 0.1:
-        signal = "BUY"
-        reason = "Expert pick + positive news sentiment"
-    elif expert_score and sentiment_score < -0.1:
-        signal = "SELL"
-        reason = "Expert pick but negative news sentiment"
-    else:
-        signal = "HOLD"
-        reason = "Mixed/neutral signal"
-
+def fetch_price_summary(ticker: str) -> dict:
+    """Get latest OHLC and daily change from AlphaVantage."""
+    if not ALPHAVANTAGE_API_KEY:
+        return {"error": "Missing ALPHAVANTAGE_API_KEY"}
+    data = _av_get({"function": PRICE_FUNCTION, "symbol": ticker, "outputsize": "compact"})
+    series = data.get("Time Series (Daily)", {})
+    if not series:
+        return {"error": f"No price data for {ticker}"}
+    # Sort by date and take last two
+    items = sorted(series.items(), key=lambda x: x[0])
+    last_date, last_val = items[-1]
+    prev_date, prev_val = items[-2] if len(items) > 1 else (None, None)
+    close = float(last_val["4. close"]) if last_val else np.nan
+    prev_close = float(prev_val["4. close"]) if prev_val else np.nan
+    pct = ((close - prev_close) / prev_close * 100) if prev_val else 0.0
     return {
-        "ticker": ticker,
-        "price": price,
-        "sentiment": sentiment_score,
-        "news": news,
-        "signal": signal,
-        "reason": reason,
+        "date": last_date,
+        "close": round(close, 2),
+        "prev_close": round(prev_close, 2) if prev_val else None,
+        "pct_change": round(pct, 2),
+        "volume": int(float(last_val.get("6. volume", 0))) if last_val else None,
     }
 
 
-def build_screener_dataframe(tickers: list, expert_rules: Dict[str, int]) -> pd.DataFrame:
+def analyze_text_sentiment(texts: list[str]) -> float:
+    """Average polarity using TextBlob [-1,1]."""
+    if not texts:
+        return 0.0
+    pols = []
+    for t in texts[:10]:  # limit per ticker
+        try:
+            pols.append(TextBlob(t).sentiment.polarity)
+        except Exception:
+            continue
+    return float(np.mean(pols)) if pols else 0.0
+
+
+def fetch_news_and_sentiment(ticker: str) -> dict:
+    """Fetch latest news via AlphaVantage and compute sentiment."""
+    if not ALPHAVANTAGE_API_KEY:
+        return {"headlines": [], "sentiment": 0.0}
+    data = _av_get({
+        "function": NEWS_FUNCTION,
+        "tickers": ticker,
+        "sort": "LATEST",
+        "time_from": "20240101T0000",
+        "limit": 20,
+    })
+    feed = data.get("feed", []) if isinstance(data, dict) else []
+    headlines = [f.get("title") for f in feed if f.get("title")]
+    sentiment = analyze_text_sentiment(headlines)
+    top = headlines[:3]
+    return {"headlines": top, "sentiment": sentiment}
+
+
+def expert_signal(price: dict, sentiment: float) -> tuple[str, str]:
+    """Blend technical micro-signal with AI sentiment.
+    Rules:
+    - Strong Buy: pct >= 0 and sentiment > 0.3, or pct < 0 and sentiment > 0.45 (positive despite dip)
+    - Buy: sentiment > 0.15 and pct > -1.5
+    - Hold: -0.15 <= sentiment <= 0.15 or abs(pct) < 0.5
+    - Sell: sentiment < -0.15 and pct < 0.5
+    - Strong Sell: sentiment < -0.35 or pct < -3 and sentiment < 0
+    Returns (label, color)
+    """
+    pct = price.get("pct_change", 0.0) or 0.0
+    if sentiment > 0.45 and pct < 0:
+        return ("Strong Buy", "#0b8457")
+    if sentiment > 0.3 and pct >= 0:
+        return ("Strong Buy", "#0b8457")
+    if sentiment > 0.15 and pct > -1.5:
+        return ("Buy", "#35c759")
+    if abs(pct) < 0.5 or (-0.15 <= sentiment <= 0.15):
+        return ("Hold", "#8e8e93")
+    if sentiment < -0.35 or (pct < -3 and sentiment < 0):
+        return ("Strong Sell", "#d0021b")
+    if sentiment < -0.15 and pct < 0.5:
+        return ("Sell", "#ff3b30")
+    return ("Hold", "#8e8e93")
+
+
+# =========================
+# UI
+# =========================
+st.set_page_config(page_title="AI Expert Stock Screener", layout="wide")
+st.title("AI Expert Screener — S&P 500")
+
+with st.sidebar:
+    st.subheader("Settings")
+    max_tickers = st.slider("Max tickers to scan (rate-limit safe)", 20, 200, 60, 10)
+    show_news = st.checkbox("Show top headlines", value=True)
+    st.caption("Uses: Wikipedia + AlphaVantage + TextBlob")
+
+# Load universe
+sp500 = fetch_sp500_tickers()
+if sp500.empty:
+    st.error("Failed to load S&P 500 tickers from Wikipedia.")
+else:
+    # Rate-limit friendly batching
     rows = []
-    for t in tickers:
-        res = ai_expert_signal(t, expert_rules)
-        rows.append(
-            {
-                "Ticker": res["ticker"],
-                "Price": res["price"],
-                "Signal": res["signal"],
-                "Sentiment": res["sentiment"],
-                "Reason": res["reason"],
-            }
-        )
-    df = pd.DataFrame(rows)
-    return df
+    scanned = 0
+    prog = st.progress(0)
+    for _, row in sp500.iterrows():
+        if scanned >= max_tickers:
+            break
+        ticker = row["ticker"]
+        name = row["name"]
+        price = fetch_price_summary(ticker)
+        if "error" in price:
+            continue
+        news = fetch_news_and_sentiment(ticker)
+        label, color = expert_signal(price, news.get("sentiment", 0.0))
+        rows.append({
+            "Ticker": ticker,
+            "Company": name,
+            "Price": price.get("close"),
+            "Change%": price.get("pct_change"),
+            "Sentiment": round(news.get("sentiment", 0.0), 2),
+            "Signal": label,
+            "_color": color,
+            "Headlines": " • ".join(news.get("headlines", [])) if show_news else "",
+        })
+        scanned += 1
+        prog.progress(min(scanned / max_tickers, 1.0))
+        time.sleep(0.2)  # gentle pacing for API
 
-
-def display_ai_expert_screener():
-    st.header("🧠 AI Expert Stock Screener — Live & Sentiment + Headlines")
-
-    default_watch = [
-        "AAPL",
-        "NVDA",
-        "MSFT",
-        "GOOGL",
-        "AMZN",
-        "TSLA",
-        "KO",
-        "BAC",
-        "PG",
-        "BMBL",
-        "TMHC",
-    ]
-
-    tickers_str = st.text_input(
-        "Enter tickers (comma-separated)", value=",".join(default_watch)
-    )
-    tickers = [t.strip().upper() for t in tickers_str.split(",") if t.strip()]
-
-    st.caption("Toggle which tickers are considered 'expert picks'")
-    cols = st.columns(min(4, max(1, len(tickers))))
-    expert_rules: Dict[str, int] = {}
-    for i, t in enumerate(tickers):
-        with cols[i % len(cols)]:
-            expert_rules[t] = 1 if st.checkbox(f"Expert pick: {t}", value=True, key=f"exp_{t}") else 0
-
-    st.caption("Filters")
-    min_sent = st.slider("Minimum sentiment", -1.0, 1.0, 0.0, 0.05)
-    signal_sel = st.multiselect("Include signals", ["BUY", "HOLD", "SELL"], default=["BUY", "HOLD", "SELL"])
-
-    st.write("Building screener. Fetching live prices and headlines…")
-    df = build_screener_dataframe(tickers, expert_rules)
-
-    if not df.empty:
-        df_filtered = df[(df["Sentiment"] >= min_sent) & (df["Signal"].isin(signal_sel))]
-        st.subheader("Results")
-        st.dataframe(df_filtered.sort_values(["Signal", "Sentiment"], ascending=[True, False]), use_container_width=True)
-
-        with st.expander("Show latest headlines per ticker"):
-            for t in tickers:
-                sent, headlines = get_news_sentiment_alpha_vantage(t)
-                st.markdown(f"### {t} • Sentiment: {sent:+.2f}")
-                if headlines:
-                    for h in headlines[:5]:
-                        st.write(f"- {h}")
-                else:
-                    st.write("No headlines available.")
+    if not rows:
+        st.warning("No results to display yet. Check API key or increase max tickers.")
     else:
-        st.info("No tickers to screen.")
+        df = pd.DataFrame(rows)
+        # Sort: Strong signals first
+        signal_rank = {
+            "Strong Buy": 5,
+            "Buy": 4,
+            "Hold": 3,
+            "Sell": 2,
+            "Strong Sell": 1,
+        }
+        df["_rank"] = df["Signal"].map(signal_rank).fillna(0)
+        df = df.sort_values(["_rank", "Change%"], ascending=[False, False])
 
+        # Professional, compact table styling
+        def color_signal(val, row):
+            return f"background-color: {row['_color']}; color: white; font-weight: 600; text-align:center; border-radius:6px;"
 
-# Invoke the screener module at the bottom of the page
-try:
-    display_ai_expert_screener()
-except Exception as e:
-    st.warning(f"Screener module encountered an issue: {type(e).__name__}: {e}")
+        def style_table(dataframe: pd.DataFrame):
+            styler = dataframe.drop(columns=["_color", "_rank"]).style \
+                .hide(axis="index") \
+                .format({"Price": "${:,.2f}", "Change%": "{:+.2f}%", "Sentiment": "{:+.2f}"}) \
+                .set_table_styles([
+                    {"selector": "th", "props": "background:#0f172a; color:white; font-weight:600; text-align:center;"},
+                    {"selector": "td", "props": "text-align:center; padding:6px 10px;"},
+                    {"selector": "table", "props": "border-collapse:separate; border-spacing:0 6px;"},
+                ])
+            # Apply signal pill colors
+            styler = styler.apply(lambda r: ["" if c != "Signal" else color_signal(r[c], r) for c in r.index], axis=1)
+            # Color change%
+            def color_change(v):
+                if pd.isna(v):
+                    return ""
+                return "color:#0b8457;" if v >= 0 else "color:#d0021b;"
+            styler = styler.applymap(color_change, subset=["Change%"])
+            return styler
+
+        st.subheader("Screened Universe")
+        st.caption("Sortable and compact. Use the column headers to sort.")
+        st.dataframe(
+            df.drop(columns=["_color", "_rank"]),
+            use_container_width=True,
+            hide_index=True,
+        )
+
+        # Also render a styled static preview (looks more professional than default dataframe in some themes)
+        st.html(style_table(df).to_html())
+
+        if show_news:
+            st.divider()
+            st.subheader("Top headlines per highlighted tickers")
+            top_df = df.head(12)[["Ticker", "Company", "Signal", "Headlines"]]
+            for _, r in top_df.iterrows():
+                if not r["Headlines"]:
+                    continue
+                st.markdown(f"- [{r['Ticker']}] {r['Company']} — {r['Signal']}: {r['Headlines']}")
+
+st.caption("Tip: Set ALPHAVANTAGE_API_KEY env var for live data. No handpicked tickers — full S&P 500 auto-scan.")
