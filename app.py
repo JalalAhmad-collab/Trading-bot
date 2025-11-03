@@ -1,10 +1,10 @@
-
 import datetime as dt
 from typing import Dict, Any, Optional, Tuple
 import ccxt
 import pandas as pd
 import yfinance as yf
 import streamlit as st
+
 
 def fetch_crypto_price(symbol: str = "BTC/USD", exchange_name: str = "kraken") -> Dict[str, Any]:
     try:
@@ -24,6 +24,7 @@ def fetch_crypto_price(symbol: str = "BTC/USD", exchange_name: str = "kraken") -
     except Exception as e:
         return {"error": f"{type(e).__name__}: {str(e)}"}
 
+
 def fetch_crypto_ohlcv(symbol: str, exchange_name: str, timeframe: str = "1h", limit: int = 200) -> Tuple[Optional[pd.DataFrame], Optional[str]]:
     try:
         exchange_class = getattr(ccxt, exchange_name)
@@ -34,6 +35,7 @@ def fetch_crypto_ohlcv(symbol: str, exchange_name: str, timeframe: str = "1h", l
         return df, None
     except Exception as e:
         return None, f"{type(e).__name__}: {str(e)}"
+
 
 def fetch_stock_price(ticker: str, period: str = "5d") -> Dict[str, Any]:
     try:
@@ -55,10 +57,12 @@ def fetch_stock_price(ticker: str, period: str = "5d") -> Dict[str, Any]:
     except Exception as e:
         return {"error": f"{type(e).__name__}: {str(e)}"}
 
+
 def sma(series: pd.Series, window: int) -> Optional[float]:
     if len(series) < window:
         return None
     return float(pd.Series(series).rolling(window=window).mean().iloc[-1])
+
 
 def buy_the_dip_logic(current_price: float, moving_average: float, dip_threshold: float = 0.97) -> Dict[str, Any]:
     if moving_average <= 0:
@@ -74,6 +78,7 @@ def buy_the_dip_logic(current_price: float, moving_average: float, dip_threshold
         "reason": f"Price is {(1 - ratio) * 100:.2f}% below MA" if should_buy else "Price above threshold",
     }
 
+
 def sell_the_high_logic(current_price: float, moving_average: float, high_threshold: float = 1.03) -> Dict[str, Any]:
     if moving_average <= 0:
         return {"error": "Invalid moving average"}
@@ -87,6 +92,7 @@ def sell_the_high_logic(current_price: float, moving_average: float, high_thresh
         "threshold": high_threshold,
         "reason": f"Price is {(ratio - 1) * 100:.2f}% above MA" if should_sell else "Price below threshold",
     }
+
 
 st.set_page_config(page_title="Streamlit SMA Trading App", page_icon="📈", layout="wide")
 st.title("📈 Simple SMA Trading App")
@@ -107,7 +113,6 @@ with st.sidebar:
     refresh = st.checkbox("Auto-refresh (every 30s)", value=False)
 
 col1, col2 = st.columns(2)
-
 if market_type == "Crypto (ccxt)":
     price = fetch_crypto_price(symbol, exchange_name)
     if "error" in price:
@@ -120,16 +125,20 @@ if market_type == "Crypto (ccxt)":
             value=f"{price['current_price']}",
             delta=f"Bid {price['bid']} / Ask {price['ask']}, H {price['high']} L {price['low']}, ts {ts_str}"
         )
+
     df, err = fetch_crypto_ohlcv(symbol, exchange_name, timeframe=timeframe, limit=candles)
     if err:
         col1.error(f"OHLCV error: {err}")
         st.stop()
+
     with col1:
         st.subheader("OHLCV")
         st.dataframe(df.tail(10), use_container_width=True)
         st.line_chart(df.set_index("datetime")["close"], use_container_width=True)
+
     closes = df["close"].values
     sma_val = sma(pd.Series(closes), sma_window)
+
     if sma_val is None:
         col2.warning(f"Need at least {sma_window} candles for SMA.")
     else:
@@ -176,46 +185,52 @@ else:
 
 if refresh:
     st.caption("Auto-refresh is enabled. Rerun periodically.")
-import yfinance as yf
+
+# ================= Professional AI Dynamic Screener Module =================
+# Live prices, sentiment, market headlines, and tabular screening UI
 import requests
-import streamlit as st
 from textblob import TextBlob
 
 ALPHAVANTAGE_API_KEY = "UANG1JGU08PNMVPA"
 
-def get_live_price(ticker):
+
+def get_live_price(ticker: str) -> Optional[float]:
     try:
         stock = yf.Ticker(ticker)
-        hist = stock.history(period='1d')
+        hist = stock.history(period="1d")
         if not hist.empty:
             return float(hist["Close"].iloc[-1])
     except Exception:
         return None
     return None
 
-def get_news_sentiment_alpha_vantage(ticker):
+
+def get_news_sentiment_alpha_vantage(ticker: str) -> Tuple[float, list]:
     url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={ticker}&apikey={ALPHAVANTAGE_API_KEY}"
     try:
         r = requests.get(url)
         if r.status_code != 200:
-            return 0, []
+            return 0.0, []
         data = r.json()
-        headlines = [d["title"] for d in data.get("feed", [])[:5]]
+        headlines = [d.get("title", "") for d in data.get("feed", [])[:10]]
         scores = []
         for hl in headlines:
-            tb = TextBlob(hl)
-            scores.append(tb.sentiment.polarity)
-        avg_sentiment = round(sum(scores)/len(scores), 2) if scores else 0
+            try:
+                tb = TextBlob(hl)
+                scores.append(tb.sentiment.polarity)
+            except Exception:
+                continue
+        avg_sentiment = round(sum(scores) / len(scores), 2) if scores else 0.0
         return avg_sentiment, headlines
     except Exception:
-        return 0, []
+        return 0.0, []
 
-def ai_expert_signal(ticker, expert_rules):
+
+def ai_expert_signal(ticker: str, expert_rules: Dict[str, int]) -> Dict[str, Any]:
     price = get_live_price(ticker)
     sentiment_score, news = get_news_sentiment_alpha_vantage(ticker)
-    expert_score = expert_rules.get(ticker, 1)   # 1=keep, 0=avoid
+    expert_score = expert_rules.get(ticker, 1)  # 1=keep, 0=avoid
 
-    # Combined logic: Must be expert pick AND have positive sentiment
     if expert_score and sentiment_score > 0.1:
         signal = "BUY"
         reason = "Expert pick + positive news sentiment"
@@ -225,35 +240,90 @@ def ai_expert_signal(ticker, expert_rules):
     else:
         signal = "HOLD"
         reason = "Mixed/neutral signal"
+
     return {
         "ticker": ticker,
         "price": price,
         "sentiment": sentiment_score,
         "news": news,
         "signal": signal,
-        "reason": reason
+        "reason": reason,
     }
 
-def display_ai_expert_dashboard(tickers, expert_rules):
-    st.title("🧠 AI ExpertLogic Dashboard (Live & Sentiment-Powered)")
+
+def build_screener_dataframe(tickers: list, expert_rules: Dict[str, int]) -> pd.DataFrame:
+    rows = []
     for t in tickers:
-        result = ai_expert_signal(t, expert_rules)
-        st.subheader(f"{result['ticker']}: {result['signal']}")
-        st.write(f"Live Price: {result['price']}")
-        st.write(f"News Sentiment Score: {result['sentiment']:.2f}")
-        st.write(f"Reason: {result['reason']}")
-        if result['news']:
-            st.write("Recent Headlines:")
-            for n in result['news']:
-                st.caption(n)
-        st.write("---")
+        res = ai_expert_signal(t, expert_rules)
+        rows.append(
+            {
+                "Ticker": res["ticker"],
+                "Price": res["price"],
+                "Signal": res["signal"],
+                "Sentiment": res["sentiment"],
+                "Reason": res["reason"],
+            }
+        )
+    df = pd.DataFrame(rows)
+    return df
 
-# Example expert buy candidates with placeholder rules (1=expert likes, 0=avoid, customize as needed!)
-# Extend or change tickers as needed per expert strategy:
-watch_tickers = ['AAPL', 'NVDA', 'KO', 'BAC', 'CROX', 'STNE', 'EEFT', 'PG', 'BMBL', 'TMHC']
-expert_rules = {ticker: 1 for ticker in watch_tickers}   # Set as needed per your logic!
 
-# Call this in your Streamlit app main section:
-display_ai_expert_dashboard(watch_tickers, expert_rules)
-display_ai_expert_dashboard(watch_tickers, expert_rules)
+def display_ai_expert_screener():
+    st.header("🧠 AI Expert Stock Screener — Live & Sentiment + Headlines")
 
+    default_watch = [
+        "AAPL",
+        "NVDA",
+        "MSFT",
+        "GOOGL",
+        "AMZN",
+        "TSLA",
+        "KO",
+        "BAC",
+        "PG",
+        "BMBL",
+        "TMHC",
+    ]
+
+    tickers_str = st.text_input(
+        "Enter tickers (comma-separated)", value=",".join(default_watch)
+    )
+    tickers = [t.strip().upper() for t in tickers_str.split(",") if t.strip()]
+
+    st.caption("Toggle which tickers are considered 'expert picks'")
+    cols = st.columns(min(4, max(1, len(tickers))))
+    expert_rules: Dict[str, int] = {}
+    for i, t in enumerate(tickers):
+        with cols[i % len(cols)]:
+            expert_rules[t] = 1 if st.checkbox(f"Expert pick: {t}", value=True, key=f"exp_{t}") else 0
+
+    st.caption("Filters")
+    min_sent = st.slider("Minimum sentiment", -1.0, 1.0, 0.0, 0.05)
+    signal_sel = st.multiselect("Include signals", ["BUY", "HOLD", "SELL"], default=["BUY", "HOLD", "SELL"])
+
+    st.write("Building screener. Fetching live prices and headlines…")
+    df = build_screener_dataframe(tickers, expert_rules)
+
+    if not df.empty:
+        df_filtered = df[(df["Sentiment"] >= min_sent) & (df["Signal"].isin(signal_sel))]
+        st.subheader("Results")
+        st.dataframe(df_filtered.sort_values(["Signal", "Sentiment"], ascending=[True, False]), use_container_width=True)
+
+        with st.expander("Show latest headlines per ticker"):
+            for t in tickers:
+                sent, headlines = get_news_sentiment_alpha_vantage(t)
+                st.markdown(f"### {t} • Sentiment: {sent:+.2f}")
+                if headlines:
+                    for h in headlines[:5]:
+                        st.write(f"- {h}")
+                else:
+                    st.write("No headlines available.")
+    else:
+        st.info("No tickers to screen.")
+
+
+# Invoke the screener module at the bottom of the page
+try:
+    display_ai_expert_screener()
+except Exception as e:
+    st.warning(f"Screener module encountered an issue: {type(e).__name__}: {e}")
