@@ -5,7 +5,6 @@ import numpy as np
 import requests
 from textblob import TextBlob
 import streamlit as st
-
 # =========================
 # Config
 # =========================
@@ -13,7 +12,6 @@ ALPHAVANTAGE_API_KEY = os.getenv("ALPHAVANTAGE_API_KEY", "")
 NEWS_FUNCTION = "NEWS_SENTIMENT"  # AlphaVantage news endpoint
 PRICE_FUNCTION = "TIME_SERIES_DAILY_ADJUSTED"
 SP500_CSV_URL = "https://raw.githubusercontent.com/datasets/s-and-p-500-companies/master/data/constituents.csv"
-
 # =========================
 # Utilities
 # =========================
@@ -55,7 +53,6 @@ def fetch_sp500_tickers() -> pd.DataFrame:
             f"Reason: {type(e).__name__}: {e}"
         )
         return fallback
-
 def _av_get(params: dict, retry: int = 2):
     base = "https://www.alphavantage.co/query"
     params = {**params, "apikey": ALPHAVANTAGE_API_KEY}
@@ -70,7 +67,6 @@ def _av_get(params: dict, retry: int = 2):
             return data
         time.sleep(2)
     return {}
-
 def fetch_price_summary(ticker: str) -> dict:
     """Get latest OHLC and daily change from AlphaVantage."""
     if not ALPHAVANTAGE_API_KEY:
@@ -86,7 +82,6 @@ def fetch_price_summary(ticker: str) -> dict:
         "close": float(latest.get("4. close", 0)),
         "pct_change": float(data.get("Meta Data", {}).get("x1. previous close", 0)) or 0,
     }
-
 def fetch_news_and_sentiment(ticker: str) -> dict:
     """Fetch news and compute sentiment score for a ticker."""
     if not ALPHAVANTAGE_API_KEY:
@@ -103,7 +98,6 @@ def fetch_news_and_sentiment(ticker: str) -> dict:
             headlines.append(title[:60])
     overall_sentiment = np.mean(sentiment_scores) if sentiment_scores else 0.0
     return {"sentiment": overall_sentiment, "headlines": headlines}
-
 def expert_signal(price: float, sentiment: float) -> tuple:
     """Combine price and sentiment for a trading signal."""
     if not price or price < 0.01:
@@ -118,7 +112,6 @@ def expert_signal(price: float, sentiment: float) -> tuple:
         return "Sell", "#ff6b6b"
     else:
         return "Hold", "#f59e0b"
-
 # =========================
 # Main Streamlit App
 # =========================
@@ -128,10 +121,8 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
 st.title("S&P 500 Trading Bot")
 st.write("AI-driven market screener powered by AlphaVantage + TextBlob NLP.")
-
 # === Sidebar Controls ===
 with st.sidebar:
     st.header("🍐 Configuration")
@@ -144,9 +135,7 @@ with st.sidebar:
         help="Higher = slower but broader coverage.",
     )
     show_news = st.checkbox("Show headlines & sentiment", value=True)
-
 st.divider()
-
 # === Main Content ===
 if st.button("🔍 Scan Market", use_container_width=True):
     sp500_df = fetch_sp500_tickers()
@@ -154,11 +143,9 @@ if st.button("🔍 Scan Market", use_container_width=True):
     rows = []
     scanned = 0
     prog = st.progress(0, text="Scanning...")
-
     for _, row in sp500_df.iloc[:max_tickers].iterrows():
         ticker = row["ticker"]
         name = row["name"]
-
         price = fetch_price_summary(ticker)
         news = fetch_news_and_sentiment(ticker)
         label, color = expert_signal(price.get("close", 0), news.get("sentiment", 0.0))
@@ -177,7 +164,6 @@ if st.button("🔍 Scan Market", use_container_width=True):
         scanned += 1
         prog.progress(min(scanned / max_tickers, 1.0))
         time.sleep(0.2)  # gentle pacing for API
-
     if not rows:
         st.warning("No results to display yet. Check API key or increase max tickers.")
     else:
@@ -192,14 +178,17 @@ if st.button("🔍 Scan Market", use_container_width=True):
         }
         df["_rank"] = df["Signal"].map(signal_rank).fillna(0)
         df = df.sort_values(["_rank", "Change%"], ascending=[False, False])
-
         # Professional, compact table styling
         def color_signal(val, row):
+            # Check if '_color' exists in the row before accessing it
+            if '_color' not in row.index:
+                return ""
             return f"background-color: {row['_color']}; color: white; font-weight: 600; text-align:center; border-radius:6px;"
-
         def style_table(dataframe: pd.DataFrame):
+            # Check which columns exist before dropping them
+            cols_to_drop = [c for c in ["_color", "_rank"] if c in dataframe.columns]
             styler = (
-                dataframe.drop(columns=["_color", "_rank"])
+                dataframe.drop(columns=cols_to_drop)
                 .style.hide(axis="index")
                 .format(
                     {"Price": "${:,.2f}", "Change%": "{:+.2f}%", "Sentiment": "{:+.2f}"}
@@ -221,35 +210,33 @@ if st.button("🔍 Scan Market", use_container_width=True):
                     ]
                 )
             )
-            # Apply signal pill colors
-            styler = styler.apply(
-                lambda r: [
-                    ""
-                    if c != "Signal"
-                    else color_signal(r[c], r)
-                    for c in r.index
-                ],
-                axis=1,
-            )
+            # Apply signal pill colors (only if '_color' column exists)
+            if "_color" in dataframe.columns:
+                styler = styler.apply(
+                    lambda r: [
+                        ""
+                        if c != "Signal"
+                        else color_signal(r[c], r)
+                        for c in r.index
+                    ],
+                    axis=1,
+                )
             # Color change%
             def color_change(v):
                 if pd.isna(v):
                     return ""
                 return "color:#0b8457;" if v >= 0 else "color:#d0021b;"
-
             styler = styler.applymap(color_change, subset=["Change%"])
             return styler
-
         st.subheader("Screened Universe")
         st.caption("Sortable and compact. Use the column headers to sort.")
         st.dataframe(
-            df.drop(columns=["_color", "_rank"]),
+            df.drop(columns=[c for c in ["_color", "_rank"] if c in df.columns]),
             use_container_width=True,
             hide_index=True,
         )
         # Also render a styled static preview (looks more professional than default dataframe in some themes)
         st.html(style_table(df).to_html())
-
         if show_news:
             st.divider()
             st.subheader("Top headlines per highlighted tickers")
