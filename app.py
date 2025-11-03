@@ -19,14 +19,39 @@ SNP_WIKI_URL = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
 # =========================
 @st.cache_data(ttl=3600)
 def fetch_sp500_tickers() -> pd.DataFrame:
-    """Fetch live S&P 500 tickers and company names from Wikipedia."""
-    tables = pd.read_html(SNP_WIKI_URL)
-    df = tables[0]
-    df = df.rename(columns={"Symbol": "ticker", "Security": "name"})
-    # Some tickers have "." which AlphaVantage expects as "-" (e.g., BRK.B -> BRK-B)
-    df["ticker"] = df["ticker"].str.replace(".", "-", regex=False)
-    return df[["ticker", "name"]]
-
+    """Fetch live S&P 500 tickers and company names from Wikipedia.
+    Falls back to a local minimal list if the network request fails.
+    """
+    try:
+        tables = pd.read_html(SNP_WIKI_URL)
+        df = tables[0]
+        df = df.rename(columns={"Symbol": "ticker", "Security": "name"})
+        # Some tickers have "." which AlphaVantage expects as "-" (e.g., BRK.B -> BRK-B)
+        df["ticker"] = df["ticker"].str.replace(".", "-", regex=False)
+        return df[["ticker", "name"]]
+    except Exception as e:
+        # Fallback: minimal local list for demo reliability
+        fallback = pd.DataFrame(
+            {
+                "ticker": [
+                    "AAPL", "MSFT", "AMZN", "NVDA", "GOOGL", "META", "TSLA", "BRK-B", "JPM", "V",
+                    "PG", "UNH", "XOM", "JNJ", "HD", "MA", "KO", "PEP", "AVGO", "COST"
+                ],
+                "name": [
+                    "Apple Inc.", "Microsoft Corporation", "Amazon.com, Inc.", "NVIDIA Corporation",
+                    "Alphabet Inc. (Class A)", "Meta Platforms, Inc.", "Tesla, Inc.", "Berkshire Hathaway Inc. (Class B)",
+                    "JPMorgan Chase & Co.", "Visa Inc.", "The Procter & Gamble Company", "UnitedHealth Group Incorporated",
+                    "Exxon Mobil Corporation", "Johnson & Johnson", "The Home Depot, Inc.", "Mastercard Incorporated",
+                    "The Coca-Cola Company", "PepsiCo, Inc.", "Broadcom Inc.", "Costco Wholesale Corporation"
+                ],
+            }
+        )
+        st.warning(
+            "Could not fetch S&P 500 constituents from Wikipedia. "
+            "Using a local fallback list for demo purposes. "
+            f"Reason: {type(e).__name__}: {e}"
+        )
+        return fallback
 
 def _av_get(params: dict, retry: int = 2):
     base = "https://www.alphavantage.co/query"
@@ -42,7 +67,6 @@ def _av_get(params: dict, retry: int = 2):
             return data
         time.sleep(2)
     return {}
-
 
 def fetch_price_summary(ticker: str) -> dict:
     """Get latest OHLC and daily change from AlphaVantage."""
@@ -67,7 +91,6 @@ def fetch_price_summary(ticker: str) -> dict:
         "volume": int(float(last_val.get("6. volume", 0))) if last_val else None,
     }
 
-
 def analyze_text_sentiment(texts: list[str]) -> float:
     """Average polarity using TextBlob [-1,1]."""
     if not texts:
@@ -79,7 +102,6 @@ def analyze_text_sentiment(texts: list[str]) -> float:
         except Exception:
             continue
     return float(np.mean(pols)) if pols else 0.0
-
 
 def fetch_news_and_sentiment(ticker: str) -> dict:
     """Fetch latest news via AlphaVantage and compute sentiment."""
@@ -97,7 +119,6 @@ def fetch_news_and_sentiment(ticker: str) -> dict:
     sentiment = analyze_text_sentiment(headlines)
     top = headlines[:3]
     return {"headlines": top, "sentiment": sentiment}
-
 
 def expert_signal(price: dict, sentiment: float) -> tuple[str, str]:
     """Blend technical micro-signal with AI sentiment.
@@ -124,13 +145,11 @@ def expert_signal(price: dict, sentiment: float) -> tuple[str, str]:
         return ("Sell", "#ff3b30")
     return ("Hold", "#8e8e93")
 
-
 # =========================
 # UI
 # =========================
 st.set_page_config(page_title="AI Expert Stock Screener", layout="wide")
 st.title("AI Expert Screener — S&P 500")
-
 with st.sidebar:
     st.subheader("Settings")
     max_tickers = st.slider("Max tickers to scan (rate-limit safe)", 20, 200, 60, 10)
@@ -140,7 +159,7 @@ with st.sidebar:
 # Load universe
 sp500 = fetch_sp500_tickers()
 if sp500.empty:
-    st.error("Failed to load S&P 500 tickers from Wikipedia.")
+    st.error("Failed to load S&P 500 tickers from Wikipedia and no fallback available.")
 else:
     # Rate-limit friendly batching
     rows = []
@@ -215,7 +234,6 @@ else:
             use_container_width=True,
             hide_index=True,
         )
-
         # Also render a styled static preview (looks more professional than default dataframe in some themes)
         st.html(style_table(df).to_html())
 
