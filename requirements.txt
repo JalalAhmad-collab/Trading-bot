@@ -4,3 +4,4 @@ pandas
 yfinance
 textblob
 requests
+lxml
